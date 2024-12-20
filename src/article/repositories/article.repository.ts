@@ -1,10 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityNotFoundError, QueryFailedError, Repository } from 'typeorm';
 import { ArticleM } from '../model/article';
 import { Articles } from '../entities/article.entity';
-import { FindWithFiltersOptions, IArticleRepository } from './article.repository.interface';
-import { ARTICLE } from '../constants';
+import { FindWithFiltersOptions, IArticleRepository, Order } from './article.repository.interface';
+import { ARTICLE, DB } from '../constants';
 
 @Injectable()
 export class ArticleRepository implements IArticleRepository {
@@ -14,50 +14,92 @@ export class ArticleRepository implements IArticleRepository {
 	) {}
 
 	async update(id: string, { title }: Partial<ArticleM>): Promise<ArticleM> {
-		const article = this.articleEntityRepository.update(
-			{
-				id: id,
-			},
-			{ title: title },
-		);
-		if (!article) throw new NotFoundException(ARTICLE.NOT_FOUND);
-		return await this.findById(id);
+		try {
+			await this.articleEntityRepository.findOneOrFail({ where: { id } });
+			await this.articleEntityRepository.update(
+				{
+					id: id,
+				},
+				{ title: title },
+			);
+			return await this.findById(id);
+		} catch (e) {
+			this.handleDatabaseError(e);
+		}
 	}
 
 	async create(article: Partial<ArticleM>): Promise<ArticleM> {
-		const articleEntity = this.toArticleEntity(article);
-		const result = await this.articleEntityRepository.insert(articleEntity);
-		return await this.findById(result.identifiers[0].id);
+		try {
+			const articleEntity = this.toArticleEntity(article);
+			const result = await this.articleEntityRepository.insert(articleEntity);
+			return await this.findById(result.identifiers[0].id);
+		} catch (e) {
+			this.handleDatabaseError(e);
+		}
 	}
 
 	// сделать пагинацию
 	async findAll(options: FindWithFiltersOptions): Promise<ArticleM[] | null> {
-		const articleEntity = this.articleEntityRepository.createQueryBuilder('article');
+		try {
+			// Условие для учета только "неудаленных" записей
+			const articleEntity = this.articleEntityRepository.createQueryBuilder(DB.NAME);
+			articleEntity.where(`${DB.NAME}.deleted_at IS NULL`);
+			// Фильтрация по строке поиска
+			if (options.search) {
+				const sanitizedSearch = `%${options.search.trim().toLowerCase()}%`;
+				articleEntity.andWhere(`LOWER(${DB.NAME}.title) LIKE LOWER(:search)`, {
+					search: sanitizedSearch,
+				});
+			}
+			// Сортировка
+			const order =
+				options.order === Order.ASC || options.order === Order.DESC ? options.order : Order.DESC;
+			articleEntity.orderBy(`${DB.NAME}.created_at`, order);
+			// Лимит и смещение
+			const limit = options.limit && options.limit > 0 ? options.limit : DB.LIMIT;
+			articleEntity.take(limit);
 
-		articleEntity.where('article.deleted_at IS NULL');
-		if (options.search) {
-			articleEntity.andWhere('article.title LIKE :search', { search: `%${options.search}%` });
+			if (options.offset) {
+				articleEntity.skip(options.offset);
+			}
+
+			// Добавление вычисляемого столбца "difference"
+			articleEntity.addSelect(
+				`ABS(DATE_PART('day', ${DB.NAME}.updated_at - ${DB.NAME}.created_at))`,
+				'difference',
+			);
+			const articleEntities = await articleEntity.getRawMany();
+			return articleEntities.map((entity) => ({
+				...this.toArticle(entity),
+				difference: parseInt(entity.difference, 10),
+			}));
+		} catch (e) {
+			this.handleDatabaseError(e);
 		}
-		articleEntity.orderBy('article.created_at ', 'DESC');
-		if (options.limit) {
-			articleEntity.take(options.limit);
-		}
-		if (options.offset) {
-			articleEntity.skip(options.offset);
-		}
-		const articleEntities = await articleEntity.getMany();
-		return articleEntities.map((articleEntity) => this.toArticle(articleEntity));
 	}
 
 	async findById(id: string): Promise<ArticleM | null> {
-		const articleEntity = await this.articleEntityRepository.findOneOrFail({ where: { id } });
-		if (!articleEntity) throw new NotFoundException(ARTICLE.NOT_FOUND);
-		return this.toArticle(articleEntity);
+		try {
+			const articleEntity = await this.articleEntityRepository.findOneOrFail({
+				where: { id },
+				withDeleted: true, // Учитываем записи, помеченные как удалённые
+			});
+			return this.toArticle(articleEntity);
+		} catch (e) {
+			this.handleDatabaseError(e);
+		}
 	}
 
-	async deleteById(id: string): Promise<boolean> {
-		const deleteResult = await this.articleEntityRepository.softDelete({ id: id });
-		return deleteResult.affected > 0;
+	async deleteById(id: string): Promise<Pick<ArticleM, 'id'>> {
+		try {
+			const article = await this.articleEntityRepository.findOneOrFail({ where: { id: id } });
+			const deleteResult = await this.articleEntityRepository.softDelete({ id: id });
+			if (deleteResult.affected > 0) {
+				return { id: article.id };
+			}
+		} catch (e) {
+			this.handleDatabaseError(e);
+		}
 	}
 
 	private toArticle(todoEntity: Articles): ArticleM {
@@ -77,5 +119,15 @@ export class ArticleRepository implements IArticleRepository {
 		articleEntity.id = todo.id;
 		articleEntity.title = todo.title;
 		return articleEntity;
+	}
+
+	private handleDatabaseError(error: any): void {
+		if (error instanceof QueryFailedError) {
+			throw new BadRequestException(error.message);
+		}
+
+		if (error instanceof EntityNotFoundError) {
+			throw new NotFoundException(ARTICLE.NOT_FOUND);
+		}
 	}
 }

@@ -5,9 +5,12 @@ import {
 	Delete,
 	Get,
 	Param,
+	ParseUUIDPipe,
 	Post,
 	Put,
 	Query,
+	UsePipes,
+	ValidationPipe,
 } from '@nestjs/common';
 import { ArticleService } from './article.service';
 import { ArticleM } from './model/article';
@@ -17,11 +20,12 @@ import { GetArticlesQueryDto } from './dto/query-articles.dto';
 import { validate } from 'class-validator';
 import { ARTICLE } from './constants';
 
+@UsePipes(new ValidationPipe())
 @Controller('articles')
 export class ArticlesController {
 	constructor(private readonly articleService: ArticleService) {}
 
-	@Get()
+	@Get() // /article?limit=100&offset=5&order=DESC&search=NestJS
 	async getAllArticles(@Query() query: GetArticlesQueryDto): Promise<ArticleM[]> {
 		const errors = await validate(query);
 		if (errors.length > 0) {
@@ -31,7 +35,7 @@ export class ArticlesController {
 	}
 
 	@Get(':id')
-	async getArticleById(@Param('id') id: string): Promise<ArticleM | null> {
+	async getArticleById(@Param('id', ParseUUIDPipe) id: string): Promise<ArticleM | null> {
 		return this.articleService.getArticleById(id);
 	}
 
@@ -42,14 +46,14 @@ export class ArticlesController {
 
 	@Put(':id')
 	async updateArticle(
-		@Param('id') id: string,
+		@Param('id', ParseUUIDPipe) id: string,
 		@Body() updateArticleDto: UpdateArticleDto,
 	): Promise<ArticleM | null> {
 		return this.articleService.updateArticle(id, updateArticleDto);
 	}
 
 	@Delete(':id')
-	async deleteArticle(@Param('id') id: string): Promise<void> {
+	async deleteArticle(@Param('id', ParseUUIDPipe) id: string): Promise<Pick<ArticleM, 'id'>> {
 		return this.articleService.deleteArticle(id);
 	}
 }

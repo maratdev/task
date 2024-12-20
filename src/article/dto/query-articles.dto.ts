@@ -1,5 +1,6 @@
-import { IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional, IsString } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { Order } from '../repositories/article.repository.interface';
 
 export class GetArticlesQueryDto {
 	@IsOptional()
@@ -11,6 +12,11 @@ export class GetArticlesQueryDto {
 	@IsNumber()
 	@Transform(({ value }) => parseInt(value, 10))
 	offset?: number;
+
+	@IsOptional()
+	@IsString()
+	@IsEnum(Order)
+	order?: Order;
 
 	@IsOptional()
 	@IsString()

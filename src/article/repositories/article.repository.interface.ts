@@ -9,11 +9,17 @@ export interface IArticleRepository {
 
 	update(id: string, title: Partial<ArticleM>): Promise<ArticleM>;
 
-	deleteById(id: string): Promise<boolean>;
+	deleteById(id: string): Promise<Pick<ArticleM, 'id'>>;
+}
+
+export enum Order {
+	'ASC' = 'ASC',
+	'DESC' = 'DESC',
 }
 
 export interface FindWithFiltersOptions {
 	limit?: number;
 	offset?: number;
 	search?: string;
+	order?: Order;
 }
